@@ -14,16 +14,312 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      events: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          end_x: number | null
+          end_y: number | null
+          event_type: string
+          id: string
+          match_id: string
+          metadata: Json
+          minute: number
+          outcome: string | null
+          player_id: string | null
+          second: number
+          tags: string[]
+          team_id: string | null
+          x: number | null
+          xg: number | null
+          y: number | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          end_x?: number | null
+          end_y?: number | null
+          event_type: string
+          id?: string
+          match_id: string
+          metadata?: Json
+          minute?: number
+          outcome?: string | null
+          player_id?: string | null
+          second?: number
+          tags?: string[]
+          team_id?: string | null
+          x?: number | null
+          xg?: number | null
+          y?: number | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          end_x?: number | null
+          end_y?: number | null
+          event_type?: string
+          id?: string
+          match_id?: string
+          metadata?: Json
+          minute?: number
+          outcome?: string | null
+          player_id?: string | null
+          second?: number
+          tags?: string[]
+          team_id?: string | null
+          x?: number | null
+          xg?: number | null
+          y?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "events_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "events_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      insights: {
+        Row: {
+          body: string
+          created_at: string
+          id: string
+          kind: string
+          match_id: string
+          metadata: Json
+          severity: string
+          title: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          id?: string
+          kind: string
+          match_id: string
+          metadata?: Json
+          severity?: string
+          title: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          match_id?: string
+          metadata?: Json
+          severity?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "insights_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "matches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      matches: {
+        Row: {
+          away_score: number
+          away_team_id: string
+          competition: string | null
+          created_at: string
+          created_by: string | null
+          home_score: number
+          home_team_id: string
+          id: string
+          kickoff: string
+          status: string
+          updated_at: string
+          venue: string | null
+        }
+        Insert: {
+          away_score?: number
+          away_team_id: string
+          competition?: string | null
+          created_at?: string
+          created_by?: string | null
+          home_score?: number
+          home_team_id: string
+          id?: string
+          kickoff?: string
+          status?: string
+          updated_at?: string
+          venue?: string | null
+        }
+        Update: {
+          away_score?: number
+          away_team_id?: string
+          competition?: string | null
+          created_at?: string
+          created_by?: string | null
+          home_score?: number
+          home_team_id?: string
+          id?: string
+          kickoff?: string
+          status?: string
+          updated_at?: string
+          venue?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "matches_away_team_id_fkey"
+            columns: ["away_team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "matches_home_team_id_fkey"
+            columns: ["home_team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      players: {
+        Row: {
+          created_at: string
+          id: string
+          jersey_number: number | null
+          name: string
+          position: string | null
+          team_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          jersey_number?: number | null
+          name: string
+          position?: string | null
+          team_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          jersey_number?: number | null
+          name?: string
+          position?: string | null
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "players_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          display_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      teams: {
+        Row: {
+          color: string
+          created_at: string
+          created_by: string | null
+          id: string
+          name: string
+          short_name: string
+          updated_at: string
+        }
+        Insert: {
+          color?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name: string
+          short_name: string
+          updated_at?: string
+        }
+        Update: {
+          color?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name?: string
+          short_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      can_write: { Args: { _user_id: string }; Returns: boolean }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "analyst" | "coach" | "scout"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +446,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["analyst", "coach", "scout"],
+    },
   },
 } as const
