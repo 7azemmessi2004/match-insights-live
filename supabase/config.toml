@@ -1,0 +1,4 @@
+project_id = "vsawzcwzvrjxithdlwzf"
+
+[functions.match-insights]
+verify_jwt = true
