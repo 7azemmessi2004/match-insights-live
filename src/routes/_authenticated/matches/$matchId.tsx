@@ -94,6 +94,31 @@ function MatchPage() {
     },
   });
 
+  const bookmarksQ = useQuery({
+    queryKey: ["bookmarks", matchId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("bookmarks").select("*").eq("match_id", matchId)
+        .order("start_sec", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as Bookmark[];
+    },
+  });
+
+  const annotationsQ = useQuery({
+    queryKey: ["annotations", matchId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("annotations").select("*").eq("match_id", matchId)
+        .order("timestamp_sec", { ascending: true });
+      if (error) throw error;
+      return (data ?? []).map((a) => ({
+        ...a,
+        data: (a.data ?? {}) as Annotation["data"],
+      })) as Annotation[];
+    },
+  });
+
   const events = eventsQ.data ?? [];
   const match = matchQ.data;
 
