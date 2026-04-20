@@ -302,6 +302,136 @@ function MatchPage() {
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "AI failed"),
   });
 
+  // ── Video & analysis mutations ────────────────────────────────────────────
+  const saveVideoMeta = useMutation({
+    mutationFn: async (info: { video_url: string; video_storage: "local" | "cloud"; video_duration_sec: number | null }) => {
+      if (info.video_storage === "local") {
+        // Don't persist object URL — store in component state only
+        setLocalVideoUrl(info.video_url);
+        return;
+      }
+      const { error } = await supabase.from("matches").update({
+        video_url: info.video_url,
+        video_storage: info.video_storage,
+        video_duration_sec: info.video_duration_sec,
+      }).eq("id", matchId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["match", matchId] }),
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to save video"),
+  });
+
+  const addBookmark = useMutation({
+    mutationFn: async (b: { label: string; start_sec: number; end_sec: number | null }) => {
+      const { error } = await supabase.from("bookmarks").insert({ match_id: matchId, ...b });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bookmarks", matchId] });
+      toast.success("Clip saved");
+    },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed"),
+  });
+
+  const deleteBookmark = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("bookmarks").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["bookmarks", matchId] }),
+  });
+
+  const addAnnotation = useMutation({
+    mutationFn: async (a: Omit<Annotation, "id"> & { color?: string; note?: string }) => {
+      const { error } = await supabase.from("annotations").insert({
+        match_id: matchId,
+        timestamp_sec: a.timestamp_sec,
+        shape: a.shape,
+        data: a.data as never,
+        color: a.color ?? null,
+        note: a.note ?? null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["annotations", matchId] }),
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed"),
+  });
+
+  const deleteAnnotation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("annotations").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["annotations", matchId] }),
+  });
+
+  const runVideoAI = async () => {
+    setAiVideoAnalyzing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("video-analyze", { body: { matchId } });
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ["bookmarks", matchId] });
+      qc.invalidateQueries({ queryKey: ["insights", matchId] });
+      toast.success(`AI detected ${(data as { events?: number })?.events ?? 0} events`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "AI video analysis failed");
+    } finally {
+      setAiVideoAnalyzing(false);
+    }
+  };
+
+  const runClipAI = async (startSec: number, endSec: number) => {
+    try {
+      const { data, error } = await supabase.functions.invoke("video-clip-analyze", {
+        body: { matchId, startSec, endSec },
+      });
+      if (error) throw error;
+      const ev = (data as { event?: { event_type: string; team: "home" | "away"; outcome?: string; x: number; y: number; end_x?: number; end_y?: number; timestamp_sec: number; note: string } })?.event;
+      if (!ev) {
+        toast.info("AI couldn't identify a clear event in this clip");
+        return;
+      }
+      const teamId = ev.team === "home" ? match!.home_team_id : match!.away_team_id;
+      const minute = Math.floor(ev.timestamp_sec / 60);
+      addEvent.mutate({
+        type: ev.event_type, team_id: teamId, minute,
+        x: ev.x, y: ev.y, end_x: ev.end_x, end_y: ev.end_y,
+        outcome: ev.outcome,
+        attacking_left_to_right: ev.team === "home",
+        metadata: { ai_suggested: true, ai_note: ev.note, video_ts: ev.timestamp_sec },
+      });
+      toast.success(`AI suggested: ${ev.event_type} (${ev.team})`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Clip analysis failed");
+    }
+  };
+
+  // Click pitch from the video panel — uses pendingType but anchors to video time
+  const onVideoPitchClick = (x: number, y: number, videoTimeSec: number) => {
+    if (!allowWrite || !match) return;
+    const teamId = pendingTeam === "home" ? match.home_team_id : match.away_team_id;
+    const needsEnd = ["pass", "cross", "carry"].includes(pendingType);
+    const minute = Math.floor(videoTimeSec / 60);
+    const second = Math.floor(videoTimeSec % 60);
+
+    if (needsEnd) {
+      if (!pendingStart) { setPendingStart({ x, y }); return; }
+      addEvent.mutate({
+        type: pendingType, team_id: teamId, minute: minute + second / 60,
+        x: pendingStart.x, y: pendingStart.y, end_x: x, end_y: y,
+        attacking_left_to_right: pendingTeam === "home",
+        metadata: { video_ts: videoTimeSec },
+      });
+    } else {
+      const outcome = pendingType === "shot" ? "on_target" : undefined;
+      addEvent.mutate({
+        type: pendingType, team_id: teamId, minute: minute + second / 60,
+        x, y, outcome, attacking_left_to_right: pendingTeam === "home",
+        metadata: { video_ts: videoTimeSec },
+      });
+    }
+  };
+
   const onPitchClick = (x: number, y: number) => {
     if (!allowWrite || !match) return;
     const teamId = pendingTeam === "home" ? match.home_team_id : match.away_team_id;
