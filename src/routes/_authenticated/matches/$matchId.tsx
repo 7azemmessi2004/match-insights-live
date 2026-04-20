@@ -677,6 +677,37 @@ function MatchPage() {
               </div>
             </TabsContent>
 
+            {/* Video tab */}
+            <TabsContent value="video" className="mt-4 min-h-0 flex-1">
+              <div className="panel-elevated h-full p-3">
+                {!resolvedVideoUrl ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                    <Film className="size-10 text-muted-foreground" />
+                    <div className="text-sm text-muted-foreground">No video imported yet</div>
+                    <Button size="sm" onClick={() => setVideoImportOpen(true)}>
+                      <Upload className="mr-1.5 size-3.5" /> Import MP4
+                    </Button>
+                  </div>
+                ) : (
+                  <VideoPanel
+                    videoUrl={resolvedVideoUrl}
+                    videoStorage={resolvedVideoStorage as "local" | "cloud"}
+                    bookmarks={bookmarksQ.data ?? []}
+                    annotations={annotationsQ.data ?? []}
+                    allowWrite={allowWrite}
+                    onAddBookmark={(b) => addBookmark.mutate(b)}
+                    onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
+                    onAddAnnotation={(a) => addAnnotation.mutate(a)}
+                    onDeleteAnnotation={(id) => deleteAnnotation.mutate(id)}
+                    onPitchClick={onVideoPitchClick}
+                    onAIAnalyze={runVideoAI}
+                    onAIClipAnalyze={runClipAI}
+                    aiAnalyzing={aiVideoAnalyzing}
+                  />
+                )}
+              </div>
+            </TabsContent>
+
             {/* Heatmap tab */}
             <TabsContent value="heatmap" className="mt-4 min-h-0 flex-1">
               <div className="grid h-full grid-cols-2 gap-4">
