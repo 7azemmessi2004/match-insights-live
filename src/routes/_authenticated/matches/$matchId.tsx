@@ -38,6 +38,9 @@ interface Match {
   id: string; status: string; home_score: number; away_score: number;
   home_team_id: string; away_team_id: string; competition: string | null;
   home_team: Team | null; away_team: Team | null;
+  video_url: string | null;
+  video_storage: "none" | "local" | "cloud";
+  video_duration_sec: number | null;
 }
 interface Event {
   id: string; match_id: string; team_id: string | null; player_id: string | null;
