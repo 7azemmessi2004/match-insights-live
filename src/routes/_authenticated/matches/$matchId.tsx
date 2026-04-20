@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,22 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Sparkles, Download, Play, Pause, FastForward } from "lucide-react";
+import {
+  ArrowLeft, Sparkles, Play, Pause, FastForward,
+  Upload, Layout, ChevronDown,
+} from "lucide-react";
 import { Pitch, yToSvg } from "@/components/pitch/Pitch";
 import { Heatmap } from "@/components/pitch/Heatmap";
 import { PassNetwork } from "@/components/pitch/PassNetwork";
+import { AnalyticsTab } from "@/components/match/AnalyticsTab";
+import { ImportDialog } from "@/components/match/ImportDialog";
+import { FormationDialog, FormationOverlay, type FormationData } from "@/components/match/FormationOverlay";
+import { TagEditDialog, type EditableEvent } from "@/components/match/ExportMenu";
 import { EVENT_TYPES, deriveTags, estimateXG } from "@/lib/tagging";
 import { useAuth, canWrite } from "@/lib/auth";
+import { exportJSON, exportExcel, exportAIReport, exportZIP, exportVideo } from "@/lib/export";
+import { generateRuleInsights } from "@/lib/rule-insights";
+import type { ImportedEvent } from "@/lib/import-data";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/matches/$matchId")({
@@ -32,6 +42,7 @@ interface Event {
   event_type: string; outcome: string | null; minute: number; second: number;
   x: number | null; y: number | null; end_x: number | null; end_y: number | null;
   tags: string[]; xg: number | null; created_at: string;
+  metadata: Record<string, unknown>;
 }
 interface Insight {
   id: string; kind: string; title: string; body: string; severity: string; created_at: string;
@@ -62,7 +73,7 @@ function MatchPage() {
         .from("events").select("*").eq("match_id", matchId)
         .order("minute", { ascending: true }).order("second", { ascending: true });
       if (error) throw error;
-      return data as Event[];
+      return (data ?? []) as Event[];
     },
     refetchInterval: 5000,
   });
@@ -81,13 +92,13 @@ function MatchPage() {
   const events = eventsQ.data ?? [];
   const match = matchQ.data;
 
-  // Tagging form state
+  // Tagging state
   const [pendingType, setPendingType] = useState<string>("pass");
   const [pendingTeam, setPendingTeam] = useState<"home" | "away">("home");
   const [pendingMinute, setPendingMinute] = useState(0);
   const [pendingStart, setPendingStart] = useState<{ x: number; y: number } | null>(null);
 
-  // Replay
+  // Replay state
   const [replayMin, setReplayMin] = useState(90);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -105,11 +116,34 @@ function MatchPage() {
     [events, replayMin]
   );
 
+  // Formation state
+  const [formationOpen, setFormationOpen] = useState(false);
+  const [homeFormation, setHomeFormation] = useState<FormationData | null>(null);
+  const [awayFormation, setAwayFormation] = useState<FormationData | null>(null);
+
+  const handleFormationApply = (data: FormationData) => {
+    if (data.team === "home") setHomeFormation(data);
+    else setAwayFormation(data);
+  };
+
+  // Import state
+  const [importOpen, setImportOpen] = useState(false);
+
+  // Edit event state
+  const [editEvent, setEditEvent] = useState<EditableEvent | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+
+  // Export menu state
+  const [exportOpen, setExportOpen] = useState(false);
+  const [videoProgress, setVideoProgress] = useState<number | null>(null);
+
+  // Mutations
   const addEvent = useMutation({
     mutationFn: async (payload: {
       type: string; team_id: string; minute: number;
       x?: number; y?: number; end_x?: number; end_y?: number;
       outcome?: string; attacking_left_to_right: boolean;
+      metadata?: Record<string, unknown>;
     }) => {
       const raw = {
         event_type: payload.type, outcome: payload.outcome ?? null,
@@ -124,10 +158,10 @@ function MatchPage() {
         second: Math.round((payload.minute % 1) * 60),
         x: payload.x, y: payload.y, end_x: payload.end_x, end_y: payload.end_y,
         tags, xg: xg || null,
+        metadata: payload.metadata ?? {},
       });
       if (error) throw error;
 
-      // If goal, bump score
       if (payload.type === "shot" && payload.outcome === "goal" && match) {
         const isHome = payload.team_id === match.home_team_id;
         await supabase.from("matches").update({
@@ -145,31 +179,72 @@ function MatchPage() {
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed"),
   });
 
-  const onPitchClick = (x: number, y: number) => {
-    if (!allowWrite || !match) return;
-    const teamId = pendingTeam === "home" ? match.home_team_id : match.away_team_id;
-    const needsEnd = ["pass", "cross", "carry"].includes(pendingType);
+  const updateEvent = useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Partial<EditableEvent> }) => {
+      const { error } = await supabase.from("events").update({
+        event_type: patch.event_type,
+        outcome: patch.outcome,
+        minute: patch.minute,
+        second: patch.second,
+        metadata: patch.metadata ?? {},
+      }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["events", matchId] });
+      toast.success("Event updated");
+    },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Update failed"),
+  });
 
-    if (needsEnd) {
-      if (!pendingStart) {
-        setPendingStart({ x, y });
-        return;
-      }
-      addEvent.mutate({
-        type: pendingType, team_id: teamId, minute: pendingMinute,
-        x: pendingStart.x, y: pendingStart.y, end_x: x, end_y: y,
-        attacking_left_to_right: pendingTeam === "home",
-      });
-    } else {
-      const outcome = pendingType === "shot" ? "on_target" : undefined;
-      addEvent.mutate({
-        type: pendingType, team_id: teamId, minute: pendingMinute,
-        x, y, outcome, attacking_left_to_right: pendingTeam === "home",
-      });
-    }
-  };
+  const deleteEvent = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("events").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["events", matchId] });
+      toast.success("Event deleted");
+    },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+  });
 
-  // AI
+  const importEvents = useMutation({
+    mutationFn: async ({
+      imported,
+      teamMapping,
+    }: {
+      imported: ImportedEvent[];
+      teamMapping: Record<"home" | "away", string>;
+    }) => {
+      if (!match) return;
+      const rows = imported.map((e) => {
+        const teamId = e._team_hint === "away" ? teamMapping.away : teamMapping.home;
+        const raw = {
+          event_type: e.event_type, outcome: e.outcome,
+          x: e.x, y: e.y, end_x: e.end_x, end_y: e.end_y,
+          attacking_direction: "left_to_right" as const,
+        };
+        return {
+          match_id: matchId, team_id: teamId,
+          event_type: e.event_type, outcome: e.outcome,
+          minute: e.minute, second: e.second,
+          x: e.x, y: e.y, end_x: e.end_x, end_y: e.end_y,
+          tags: deriveTags(raw),
+          xg: estimateXG(raw) || null,
+          metadata: e.metadata ?? {},
+        };
+      });
+      const { error } = await supabase.from("events").insert(rows);
+      if (error) throw error;
+    },
+    onSuccess: (_, { imported }) => {
+      qc.invalidateQueries({ queryKey: ["events", matchId] });
+      toast.success(`${imported.length} events imported`);
+    },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Import failed"),
+  });
+
   const runAI = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("match-insights", {
@@ -185,30 +260,71 @@ function MatchPage() {
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "AI failed"),
   });
 
-  // Export
-  const exportMatch = () => {
-    const payload = {
-      match, events, insights: insightsQ.data ?? [],
-      exported_at: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `match-${matchId}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Match exported");
+  const onPitchClick = (x: number, y: number) => {
+    if (!allowWrite || !match) return;
+    const teamId = pendingTeam === "home" ? match.home_team_id : match.away_team_id;
+    const needsEnd = ["pass", "cross", "carry"].includes(pendingType);
+
+    if (needsEnd) {
+      if (!pendingStart) { setPendingStart({ x, y }); return; }
+      addEvent.mutate({
+        type: pendingType, team_id: teamId, minute: pendingMinute,
+        x: pendingStart.x, y: pendingStart.y, end_x: x, end_y: y,
+        attacking_left_to_right: pendingTeam === "home",
+      });
+    } else {
+      const outcome = pendingType === "shot" ? "on_target" : undefined;
+      addEvent.mutate({
+        type: pendingType, team_id: teamId, minute: pendingMinute,
+        x, y, outcome, attacking_left_to_right: pendingTeam === "home",
+      });
+    }
   };
+
+  const asExportMatch = () => ({ ...match!, home_team: match!.home_team, away_team: match!.away_team });
+  const asExportEvents = () => events.map((e) => ({ ...e, metadata: e.metadata ?? {} }));
+
+  const handleExport = async (format: "json" | "excel" | "report" | "zip" | "video") => {
+    if (!match) return;
+    setExportOpen(false);
+    try {
+      if (format === "json") { exportJSON(asExportMatch(), asExportEvents()); toast.success("JSON exported"); }
+      else if (format === "excel") { exportExcel(asExportMatch(), asExportEvents()); toast.success("Excel exported"); }
+      else if (format === "report") { exportAIReport(asExportMatch(), asExportEvents()); toast.success("Report exported"); }
+      else if (format === "zip") { await exportZIP(asExportMatch(), asExportEvents()); toast.success("ZIP exported"); }
+      else if (format === "video") {
+        toast.info("Rendering video… this may take a minute.");
+        setVideoProgress(0);
+        await exportVideo(asExportMatch(), asExportEvents(), (pct) => setVideoProgress(pct));
+        setVideoProgress(null);
+        toast.success("Video exported");
+      }
+    } catch (e) {
+      setVideoProgress(null);
+      toast.error(e instanceof Error ? e.message : "Export failed");
+    }
+  };
+
+  const offlineInsights = useMemo(() => {
+    if (!match) return [];
+    return generateRuleInsights(
+      { ...match, home_team: match.home_team, away_team: match.away_team },
+      events.map((e) => ({ ...e, metadata: e.metadata ?? {} }))
+    );
+  }, [events, match]);
 
   if (!match) return <div className="p-12 text-sm text-muted-foreground">Loading match…</div>;
 
-  // Stats
   const stats = computeStats(events, match);
-
-  // Pass network for selected team
   const homeEvents = events.filter((e) => e.team_id === match.home_team_id);
   const homeNet = buildPassNetwork(homeEvents);
+
+  const allInsights = [
+    ...(insightsQ.data ?? []),
+    ...offlineInsights
+      .filter((oi) => !(insightsQ.data ?? []).some((ai) => ai.title === oi.title))
+      .map((oi, i) => ({ ...oi, id: `offline-${i}`, created_at: "" })),
+  ];
 
   return (
     <div className="flex h-screen flex-col">
@@ -229,16 +345,50 @@ function MatchPage() {
             {Math.floor(replayMin)}:{String(Math.floor((replayMin % 1) * 60)).padStart(2, "0")}
           </div>
         </div>
+
         <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setImportOpen(true)}>
+            <Upload className="mr-1.5 size-3.5" /> Import
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setFormationOpen(true)}>
+            <Layout className="mr-1.5 size-3.5" /> Formation
+          </Button>
           <Button size="sm" variant="ghost" onClick={() => runAI.mutate()} disabled={runAI.isPending || events.length < 5}>
             <Sparkles className="mr-1.5 size-3.5" />
             {runAI.isPending ? "Analysing…" : "AI insights"}
           </Button>
-          <Button size="sm" variant="ghost" onClick={exportMatch}>
-            <Download className="mr-1.5 size-3.5" /> Export
-          </Button>
+          <div className="relative">
+            <Button size="sm" variant="ghost" onClick={() => setExportOpen((o) => !o)}>
+              Export <ChevronDown className="ml-1 size-3" />
+            </Button>
+            {exportOpen && (
+              <div
+                className="absolute right-0 top-full z-50 mt-1 min-w-[148px] rounded-lg border border-border bg-surface shadow-lg"
+                onMouseLeave={() => setExportOpen(false)}
+              >
+                {(["json", "excel", "report", "zip", "video"] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    className="block w-full px-4 py-2 text-left text-xs hover:bg-surface-2 capitalize"
+                    onClick={() => handleExport(fmt)}
+                  >
+                    {fmt === "report" ? "AI Report (.txt)"
+                      : fmt === "video" ? "Replay Video (.webm)"
+                      : fmt.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
+
+      {/* Video progress bar */}
+      {videoProgress !== null && (
+        <div className="h-1 bg-border">
+          <div className="h-full bg-primary transition-all" style={{ width: `${videoProgress}%` }} />
+        </div>
+      )}
 
       {/* Stats strip */}
       <div className="grid grid-cols-5 border-b border-border bg-background">
@@ -257,7 +407,8 @@ function MatchPage() {
               <TabsList>
                 <TabsTrigger value="live">Tag</TabsTrigger>
                 <TabsTrigger value="heatmap">Heatmap</TabsTrigger>
-                <TabsTrigger value="passes">Pass network</TabsTrigger>
+                <TabsTrigger value="passes">Pass Network</TabsTrigger>
+                <TabsTrigger value="analytics">Analytics</TabsTrigger>
               </TabsList>
 
               {/* Replay controls */}
@@ -285,6 +436,7 @@ function MatchPage() {
               </div>
             </div>
 
+            {/* Tag tab */}
             <TabsContent value="live" className="mt-4 min-h-0 flex-1">
               <div className="panel-elevated flex h-full flex-col p-4">
                 {allowWrite && (
@@ -321,8 +473,24 @@ function MatchPage() {
                 )}
                 <div className="flex-1">
                   <Pitch onClick={onPitchClick} className="h-full w-full">
+                    {homeFormation && match.home_team && (
+                      <FormationOverlay formation={homeFormation} color={match.home_team.color} mirror={false} />
+                    )}
+                    {awayFormation && match.away_team && (
+                      <FormationOverlay formation={awayFormation} color={match.away_team.color} mirror={true} />
+                    )}
                     {visibleEvents.map((e) => (
-                      <EventMarker key={e.id} e={e} match={match} />
+                      <EventMarker
+                        key={e.id} e={e} match={match}
+                        onClick={allowWrite ? () => {
+                          setEditEvent({
+                            id: e.id, event_type: e.event_type, outcome: e.outcome,
+                            minute: e.minute, second: e.second, tags: e.tags,
+                            metadata: e.metadata ?? {},
+                          });
+                          setEditOpen(true);
+                        } : undefined}
+                      />
                     ))}
                     {pendingStart && (
                       <circle cx={pendingStart.x} cy={yToSvg(pendingStart.y)} r="1.2"
@@ -333,6 +501,7 @@ function MatchPage() {
               </div>
             </TabsContent>
 
+            {/* Heatmap tab */}
             <TabsContent value="heatmap" className="mt-4 min-h-0 flex-1">
               <div className="grid h-full grid-cols-2 gap-4">
                 <div className="panel-elevated p-3">
@@ -358,6 +527,7 @@ function MatchPage() {
               </div>
             </TabsContent>
 
+            {/* Pass network tab */}
             <TabsContent value="passes" className="mt-4 min-h-0 flex-1">
               <div className="panel-elevated h-full p-3">
                 <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
@@ -371,16 +541,25 @@ function MatchPage() {
                 />
               </div>
             </TabsContent>
+
+            {/* Analytics tab */}
+            <TabsContent value="analytics" className="mt-4 min-h-0 flex-1 overflow-y-auto">
+              <AnalyticsTab
+                events={events.map((e) => ({ ...e, metadata: e.metadata ?? {} }))}
+                match={match}
+              />
+            </TabsContent>
           </Tabs>
         </div>
 
-        {/* Right rail: timeline + insights */}
+        {/* Right rail */}
         <aside className="flex min-h-0 flex-col border-l border-border bg-surface">
           <Tabs defaultValue="timeline" className="flex min-h-0 flex-1 flex-col">
             <TabsList className="mx-4 mt-4">
               <TabsTrigger value="timeline" className="flex-1">Timeline</TabsTrigger>
-              <TabsTrigger value="insights" className="flex-1">Insights ({insightsQ.data?.length ?? 0})</TabsTrigger>
+              <TabsTrigger value="insights" className="flex-1">Insights ({allInsights.length})</TabsTrigger>
             </TabsList>
+
             <TabsContent value="timeline" className="mt-3 min-h-0 flex-1 overflow-y-auto px-4 pb-4">
               {visibleEvents.length === 0 && (
                 <div className="py-8 text-center text-xs text-muted-foreground">
@@ -388,16 +567,27 @@ function MatchPage() {
                 </div>
               )}
               {[...visibleEvents].reverse().map((e) => (
-                <TimelineRow key={e.id} e={e} match={match} />
+                <TimelineRow
+                  key={e.id} e={e} match={match}
+                  onEdit={allowWrite ? () => {
+                    setEditEvent({
+                      id: e.id, event_type: e.event_type, outcome: e.outcome,
+                      minute: e.minute, second: e.second, tags: e.tags,
+                      metadata: e.metadata ?? {},
+                    });
+                    setEditOpen(true);
+                  } : undefined}
+                />
               ))}
             </TabsContent>
+
             <TabsContent value="insights" className="mt-3 min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-              {(!insightsQ.data || insightsQ.data.length === 0) && (
+              {allInsights.length === 0 && (
                 <div className="py-8 text-center text-xs text-muted-foreground">
-                  No AI insights yet. Tag at least 5 events then click <b>AI insights</b>.
+                  No insights yet. Tag at least 5 events or click <b>AI insights</b>.
                 </div>
               )}
-              {insightsQ.data?.map((i) => (
+              {allInsights.map((i) => (
                 <div key={i.id} className="mb-3 rounded-md border border-border bg-background/50 p-3">
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-[10px] uppercase">{i.kind}</Badge>
@@ -415,6 +605,33 @@ function MatchPage() {
           </Tabs>
         </aside>
       </div>
+
+      {/* Dialogs */}
+      <TagEditDialog
+        event={editEvent}
+        open={editOpen}
+        onClose={() => { setEditOpen(false); setEditEvent(null); }}
+        onSave={(id, patch) => updateEvent.mutate({ id, patch })}
+        onDelete={(id) => deleteEvent.mutate(id)}
+      />
+
+      <ImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        homeTeamName={match.home_team?.name ?? "Home"}
+        awayTeamName={match.away_team?.name ?? "Away"}
+        homeTeamId={match.home_team_id}
+        awayTeamId={match.away_team_id}
+        onImport={(imported, teamMapping) => importEvents.mutate({ imported, teamMapping })}
+      />
+
+      <FormationDialog
+        open={formationOpen}
+        onClose={() => setFormationOpen(false)}
+        onApply={handleFormationApply}
+        homeTeamName={match.home_team?.name ?? "Home"}
+        awayTeamName={match.away_team?.name ?? "Away"}
+      />
     </div>
   );
 }
@@ -439,16 +656,28 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
-function EventMarker({ e, match }: { e: Event; match: Match }) {
+function EventMarker({
+  e, match, onClick,
+}: {
+  e: Event; match: Match; onClick?: () => void;
+}) {
   if (e.x == null || e.y == null) return null;
   const isHome = e.team_id === match.home_team_id;
   const color = isHome ? match.home_team?.color : match.away_team?.color;
   const isShot = e.event_type === "shot";
   const isGoal = e.outcome === "goal";
 
+  const handleClick = (ev: React.MouseEvent) => {
+    ev.stopPropagation();
+    onClick?.();
+  };
+
   if (e.end_x != null && e.end_y != null) {
     return (
-      <g>
+      <g
+        onClick={handleClick}
+        style={{ cursor: onClick ? "pointer" : undefined, pointerEvents: onClick ? "all" : "none" }}
+      >
         <line x1={e.x} y1={yToSvg(e.y)} x2={e.end_x} y2={yToSvg(e.end_y)}
           stroke={color} strokeWidth="0.3" opacity="0.5" />
         <circle cx={e.x} cy={yToSvg(e.y)} r="0.7" fill={color} />
@@ -457,19 +686,30 @@ function EventMarker({ e, match }: { e: Event; match: Match }) {
     );
   }
   return (
-    <circle cx={e.x} cy={yToSvg(e.y)}
+    <circle
+      cx={e.x} cy={yToSvg(e.y)}
       r={isGoal ? 1.4 : isShot ? 1 : 0.7}
       fill={isGoal ? "var(--color-warning)" : color}
       stroke={isGoal ? "white" : "none"} strokeWidth="0.3"
+      style={{ cursor: onClick ? "pointer" : undefined, pointerEvents: onClick ? "all" : "none" }}
+      onClick={handleClick}
     />
   );
 }
 
-function TimelineRow({ e, match }: { e: Event; match: Match }) {
+function TimelineRow({
+  e, match, onEdit,
+}: {
+  e: Event; match: Match; onEdit?: () => void;
+}) {
   const isHome = e.team_id === match.home_team_id;
   const color = isHome ? match.home_team?.color : match.away_team?.color;
+  const playerName = e.metadata?.player_name as string | undefined;
   return (
-    <div className="mb-2 flex gap-3 rounded-md border border-border bg-background/40 p-2 text-xs">
+    <div
+      className={`mb-2 flex gap-3 rounded-md border border-border bg-background/40 p-2 text-xs ${onEdit ? "cursor-pointer hover:bg-surface/60" : ""}`}
+      onClick={onEdit}
+    >
       <div className="font-mono text-muted-foreground tabular-nums">
         {e.minute}:{String(e.second).padStart(2, "0")}
       </div>
@@ -480,6 +720,9 @@ function TimelineRow({ e, match }: { e: Event; match: Match }) {
           {e.outcome && <span className="text-muted-foreground"> · {e.outcome}</span>}
           {e.xg != null && e.xg > 0 && <span className="ml-2 font-mono text-warning">xG {e.xg.toFixed(2)}</span>}
         </div>
+        {playerName && (
+          <div className="mt-0.5 text-muted-foreground">{playerName}</div>
+        )}
         {e.tags.length > 1 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {e.tags.filter((t) => t !== e.event_type).slice(0, 4).map((t) => (
@@ -513,7 +756,6 @@ function computeStats(events: Event[], match: Match) {
 
 function buildPassNetwork(events: Event[]) {
   const passes = events.filter((e) => e.event_type === "pass" && e.x != null && e.end_x != null);
-  // Bin start positions to ~10x10 cells
   const bin = (x: number, y: number) => `${Math.round(x / 12)}-${Math.round(y / 12)}`;
   const nodeMap = new Map<string, { x: number; y: number; count: number }>();
   const edgeMap = new Map<string, { fromX: number; fromY: number; toX: number; toY: number; count: number }>();
@@ -525,8 +767,8 @@ function buildPassNetwork(events: Event[]) {
     const tn = nodeMap.get(tk) ?? { x: p.end_x!, y: p.end_y!, count: 0 };
     tn.count++; nodeMap.set(tk, tn);
     const ek = `${fk}>${tk}`;
-    const e = edgeMap.get(ek) ?? { fromX: p.x!, fromY: p.y!, toX: p.end_x!, toY: p.end_y!, count: 0 };
-    e.count++; edgeMap.set(ek, e);
+    const ev = edgeMap.get(ek) ?? { fromX: p.x!, fromY: p.y!, toX: p.end_x!, toY: p.end_y!, count: 0 };
+    ev.count++; edgeMap.set(ek, ev);
   }
   return { nodes: Array.from(nodeMap.values()), edges: Array.from(edgeMap.values()) };
 }
