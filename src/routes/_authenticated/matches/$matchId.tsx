@@ -158,7 +158,7 @@ function MatchPage() {
         second: Math.round((payload.minute % 1) * 60),
         x: payload.x, y: payload.y, end_x: payload.end_x, end_y: payload.end_y,
         tags, xg: xg || null,
-        metadata: payload.metadata ?? {},
+        metadata: (payload.metadata ?? {}) as never,
       });
       if (error) throw error;
 
@@ -186,7 +186,7 @@ function MatchPage() {
         outcome: patch.outcome,
         minute: patch.minute,
         second: patch.second,
-        metadata: patch.metadata ?? {},
+        metadata: (patch.metadata ?? {}) as never,
       }).eq("id", id);
       if (error) throw error;
     },
@@ -232,10 +232,10 @@ function MatchPage() {
           x: e.x, y: e.y, end_x: e.end_x, end_y: e.end_y,
           tags: deriveTags(raw),
           xg: estimateXG(raw) || null,
-          metadata: e.metadata ?? {},
+          metadata: (e.metadata ?? {}) as never,
         };
       });
-      const { error } = await supabase.from("events").insert(rows);
+      const { error } = await supabase.from("events").insert(rows as never);
       if (error) throw error;
     },
     onSuccess: (_, { imported }) => {
