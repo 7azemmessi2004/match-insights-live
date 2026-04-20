@@ -808,6 +808,13 @@ function MatchPage() {
         homeTeamName={match.home_team?.name ?? "Home"}
         awayTeamName={match.away_team?.name ?? "Away"}
       />
+
+      <VideoImportDialog
+        open={videoImportOpen}
+        onClose={() => setVideoImportOpen(false)}
+        matchId={matchId}
+        onImported={(info) => saveVideoMeta.mutate(info)}
+      />
     </div>
   );
 }
