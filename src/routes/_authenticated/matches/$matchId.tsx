@@ -11,13 +11,15 @@ import { Badge } from "@/components/ui/badge";
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft, Sparkles, Play, Pause, FastForward,
-  Upload, Layout, ChevronDown,
+  Upload, Layout, ChevronDown, Film,
 } from "lucide-react";
 import { Pitch, yToSvg } from "@/components/pitch/Pitch";
 import { Heatmap } from "@/components/pitch/Heatmap";
 import { PassNetwork } from "@/components/pitch/PassNetwork";
 import { AnalyticsTab } from "@/components/match/AnalyticsTab";
 import { ImportDialog } from "@/components/match/ImportDialog";
+import { VideoImportDialog } from "@/components/match/VideoImportDialog";
+import { VideoPanel, type Bookmark, type Annotation } from "@/components/match/VideoPanel";
 import { FormationDialog, FormationOverlay, type FormationData } from "@/components/match/FormationOverlay";
 import { TagEditDialog, type EditableEvent } from "@/components/match/ExportMenu";
 import { EVENT_TYPES, deriveTags, estimateXG } from "@/lib/tagging";
@@ -36,6 +38,9 @@ interface Match {
   id: string; status: string; home_score: number; away_score: number;
   home_team_id: string; away_team_id: string; competition: string | null;
   home_team: Team | null; away_team: Team | null;
+  video_url: string | null;
+  video_storage: "none" | "local" | "cloud";
+  video_duration_sec: number | null;
 }
 interface Event {
   id: string; match_id: string; team_id: string | null; player_id: string | null;
@@ -89,6 +94,31 @@ function MatchPage() {
     },
   });
 
+  const bookmarksQ = useQuery({
+    queryKey: ["bookmarks", matchId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("bookmarks").select("*").eq("match_id", matchId)
+        .order("start_sec", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as Bookmark[];
+    },
+  });
+
+  const annotationsQ = useQuery({
+    queryKey: ["annotations", matchId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("annotations").select("*").eq("match_id", matchId)
+        .order("timestamp_sec", { ascending: true });
+      if (error) throw error;
+      return (data ?? []).map((a) => ({
+        ...a,
+        data: (a.data ?? {}) as Annotation["data"],
+      })) as Annotation[];
+    },
+  });
+
   const events = eventsQ.data ?? [];
   const match = matchQ.data;
 
@@ -128,6 +158,10 @@ function MatchPage() {
 
   // Import state
   const [importOpen, setImportOpen] = useState(false);
+  const [videoImportOpen, setVideoImportOpen] = useState(false);
+
+  // Local-mode video URL (object URLs not persisted to DB)
+  const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
 
   // Edit event state
   const [editEvent, setEditEvent] = useState<EditableEvent | null>(null);
@@ -136,6 +170,14 @@ function MatchPage() {
   // Export menu state
   const [exportOpen, setExportOpen] = useState(false);
   const [videoProgress, setVideoProgress] = useState<number | null>(null);
+
+  // AI video analysis state
+  const [aiVideoAnalyzing, setAiVideoAnalyzing] = useState(false);
+
+  // Resolved video URL (local takes priority over saved cloud URL)
+  const resolvedVideoUrl = localVideoUrl ?? (match?.video_storage === "cloud" ? match?.video_url : null) ?? null;
+  const resolvedVideoStorage: "local" | "cloud" | "none" =
+    localVideoUrl ? "local" : (match?.video_storage === "cloud" ? "cloud" : "none");
 
   // Mutations
   const addEvent = useMutation({
@@ -260,6 +302,136 @@ function MatchPage() {
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "AI failed"),
   });
 
+  // ── Video & analysis mutations ────────────────────────────────────────────
+  const saveVideoMeta = useMutation({
+    mutationFn: async (info: { video_url: string; video_storage: "local" | "cloud"; video_duration_sec: number | null }) => {
+      if (info.video_storage === "local") {
+        // Don't persist object URL — store in component state only
+        setLocalVideoUrl(info.video_url);
+        return;
+      }
+      const { error } = await supabase.from("matches").update({
+        video_url: info.video_url,
+        video_storage: info.video_storage,
+        video_duration_sec: info.video_duration_sec,
+      }).eq("id", matchId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["match", matchId] }),
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to save video"),
+  });
+
+  const addBookmark = useMutation({
+    mutationFn: async (b: { label: string; start_sec: number; end_sec: number | null }) => {
+      const { error } = await supabase.from("bookmarks").insert({ match_id: matchId, ...b });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bookmarks", matchId] });
+      toast.success("Clip saved");
+    },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed"),
+  });
+
+  const deleteBookmark = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("bookmarks").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["bookmarks", matchId] }),
+  });
+
+  const addAnnotation = useMutation({
+    mutationFn: async (a: { timestamp_sec: number; shape: Annotation["shape"]; data: Annotation["data"]; color?: string; note?: string }) => {
+      const { error } = await supabase.from("annotations").insert({
+        match_id: matchId,
+        timestamp_sec: a.timestamp_sec,
+        shape: a.shape,
+        data: a.data as never,
+        color: a.color ?? null,
+        note: a.note ?? null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["annotations", matchId] }),
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Failed"),
+  });
+
+  const deleteAnnotation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("annotations").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["annotations", matchId] }),
+  });
+
+  const runVideoAI = async () => {
+    setAiVideoAnalyzing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("video-analyze", { body: { matchId } });
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ["bookmarks", matchId] });
+      qc.invalidateQueries({ queryKey: ["insights", matchId] });
+      toast.success(`AI detected ${(data as { events?: number })?.events ?? 0} events`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "AI video analysis failed");
+    } finally {
+      setAiVideoAnalyzing(false);
+    }
+  };
+
+  const runClipAI = async (startSec: number, endSec: number) => {
+    try {
+      const { data, error } = await supabase.functions.invoke("video-clip-analyze", {
+        body: { matchId, startSec, endSec },
+      });
+      if (error) throw error;
+      const ev = (data as { event?: { event_type: string; team: "home" | "away"; outcome?: string; x: number; y: number; end_x?: number; end_y?: number; timestamp_sec: number; note: string } })?.event;
+      if (!ev) {
+        toast.info("AI couldn't identify a clear event in this clip");
+        return;
+      }
+      const teamId = ev.team === "home" ? match!.home_team_id : match!.away_team_id;
+      const minute = Math.floor(ev.timestamp_sec / 60);
+      addEvent.mutate({
+        type: ev.event_type, team_id: teamId, minute,
+        x: ev.x, y: ev.y, end_x: ev.end_x, end_y: ev.end_y,
+        outcome: ev.outcome,
+        attacking_left_to_right: ev.team === "home",
+        metadata: { ai_suggested: true, ai_note: ev.note, video_ts: ev.timestamp_sec },
+      });
+      toast.success(`AI suggested: ${ev.event_type} (${ev.team})`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Clip analysis failed");
+    }
+  };
+
+  // Click pitch from the video panel — uses pendingType but anchors to video time
+  const onVideoPitchClick = (x: number, y: number, videoTimeSec: number) => {
+    if (!allowWrite || !match) return;
+    const teamId = pendingTeam === "home" ? match.home_team_id : match.away_team_id;
+    const needsEnd = ["pass", "cross", "carry"].includes(pendingType);
+    const minute = Math.floor(videoTimeSec / 60);
+    const second = Math.floor(videoTimeSec % 60);
+
+    if (needsEnd) {
+      if (!pendingStart) { setPendingStart({ x, y }); return; }
+      addEvent.mutate({
+        type: pendingType, team_id: teamId, minute: minute + second / 60,
+        x: pendingStart.x, y: pendingStart.y, end_x: x, end_y: y,
+        attacking_left_to_right: pendingTeam === "home",
+        metadata: { video_ts: videoTimeSec },
+      });
+    } else {
+      const outcome = pendingType === "shot" ? "on_target" : undefined;
+      addEvent.mutate({
+        type: pendingType, team_id: teamId, minute: minute + second / 60,
+        x, y, outcome, attacking_left_to_right: pendingTeam === "home",
+        metadata: { video_ts: videoTimeSec },
+      });
+    }
+  };
+
   const onPitchClick = (x: number, y: number) => {
     if (!allowWrite || !match) return;
     const teamId = pendingTeam === "home" ? match.home_team_id : match.away_team_id;
@@ -348,7 +520,10 @@ function MatchPage() {
 
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" onClick={() => setImportOpen(true)}>
-            <Upload className="mr-1.5 size-3.5" /> Import
+            <Upload className="mr-1.5 size-3.5" /> Import data
+          </Button>
+          <Button size="sm" variant={resolvedVideoUrl ? "ghost" : "default"} onClick={() => setVideoImportOpen(true)}>
+            <Film className="mr-1.5 size-3.5" /> {resolvedVideoUrl ? "Replace video" : "Import video"}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setFormationOpen(true)}>
             <Layout className="mr-1.5 size-3.5" /> Formation
@@ -406,6 +581,7 @@ function MatchPage() {
             <div className="flex items-center justify-between">
               <TabsList>
                 <TabsTrigger value="live">Tag</TabsTrigger>
+                <TabsTrigger value="video">Video</TabsTrigger>
                 <TabsTrigger value="heatmap">Heatmap</TabsTrigger>
                 <TabsTrigger value="passes">Pass Network</TabsTrigger>
                 <TabsTrigger value="analytics">Analytics</TabsTrigger>
@@ -498,6 +674,37 @@ function MatchPage() {
                     )}
                   </Pitch>
                 </div>
+              </div>
+            </TabsContent>
+
+            {/* Video tab */}
+            <TabsContent value="video" className="mt-4 min-h-0 flex-1">
+              <div className="panel-elevated h-full p-3">
+                {!resolvedVideoUrl ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                    <Film className="size-10 text-muted-foreground" />
+                    <div className="text-sm text-muted-foreground">No video imported yet</div>
+                    <Button size="sm" onClick={() => setVideoImportOpen(true)}>
+                      <Upload className="mr-1.5 size-3.5" /> Import MP4
+                    </Button>
+                  </div>
+                ) : (
+                  <VideoPanel
+                    videoUrl={resolvedVideoUrl}
+                    videoStorage={resolvedVideoStorage as "local" | "cloud"}
+                    bookmarks={bookmarksQ.data ?? []}
+                    annotations={annotationsQ.data ?? []}
+                    allowWrite={allowWrite}
+                    onAddBookmark={(b) => addBookmark.mutate(b)}
+                    onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
+                    onAddAnnotation={(a) => addAnnotation.mutate(a)}
+                    onDeleteAnnotation={(id) => deleteAnnotation.mutate(id)}
+                    onPitchClick={onVideoPitchClick}
+                    onAIAnalyze={runVideoAI}
+                    onAIClipAnalyze={runClipAI}
+                    aiAnalyzing={aiVideoAnalyzing}
+                  />
+                )}
               </div>
             </TabsContent>
 
@@ -631,6 +838,13 @@ function MatchPage() {
         onApply={handleFormationApply}
         homeTeamName={match.home_team?.name ?? "Home"}
         awayTeamName={match.away_team?.name ?? "Away"}
+      />
+
+      <VideoImportDialog
+        open={videoImportOpen}
+        onClose={() => setVideoImportOpen(false)}
+        matchId={matchId}
+        onImported={(info) => saveVideoMeta.mutate(info)}
       />
     </div>
   );

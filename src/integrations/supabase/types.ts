@@ -14,6 +14,91 @@ export type Database = {
   }
   public: {
     Tables: {
+      annotations: {
+        Row: {
+          color: string | null
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          match_id: string
+          note: string | null
+          shape: string
+          timestamp_sec: number
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          match_id: string
+          note?: string | null
+          shape: string
+          timestamp_sec: number
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          match_id?: string
+          note?: string | null
+          shape?: string
+          timestamp_sec?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "annotations_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "matches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      bookmarks: {
+        Row: {
+          color: string | null
+          created_at: string
+          created_by: string | null
+          end_sec: number | null
+          id: string
+          label: string
+          match_id: string
+          start_sec: number
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          created_by?: string | null
+          end_sec?: number | null
+          id?: string
+          label: string
+          match_id: string
+          start_sec: number
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          created_by?: string | null
+          end_sec?: number | null
+          id?: string
+          label?: string
+          match_id?: string
+          start_sec?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bookmarks_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "matches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       events: {
         Row: {
           created_at: string
@@ -151,6 +236,9 @@ export type Database = {
           status: string
           updated_at: string
           venue: string | null
+          video_duration_sec: number | null
+          video_storage: string
+          video_url: string | null
         }
         Insert: {
           away_score?: number
@@ -165,6 +253,9 @@ export type Database = {
           status?: string
           updated_at?: string
           venue?: string | null
+          video_duration_sec?: number | null
+          video_storage?: string
+          video_url?: string | null
         }
         Update: {
           away_score?: number
@@ -179,6 +270,9 @@ export type Database = {
           status?: string
           updated_at?: string
           venue?: string | null
+          video_duration_sec?: number | null
+          video_storage?: string
+          video_url?: string | null
         }
         Relationships: [
           {
