@@ -581,6 +581,7 @@ function MatchPage() {
             <div className="flex items-center justify-between">
               <TabsList>
                 <TabsTrigger value="live">Tag</TabsTrigger>
+                <TabsTrigger value="video">Video</TabsTrigger>
                 <TabsTrigger value="heatmap">Heatmap</TabsTrigger>
                 <TabsTrigger value="passes">Pass Network</TabsTrigger>
                 <TabsTrigger value="analytics">Analytics</TabsTrigger>
