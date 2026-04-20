@@ -520,7 +520,10 @@ function MatchPage() {
 
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" onClick={() => setImportOpen(true)}>
-            <Upload className="mr-1.5 size-3.5" /> Import
+            <Upload className="mr-1.5 size-3.5" /> Import data
+          </Button>
+          <Button size="sm" variant={resolvedVideoUrl ? "ghost" : "default"} onClick={() => setVideoImportOpen(true)}>
+            <Film className="mr-1.5 size-3.5" /> {resolvedVideoUrl ? "Replace video" : "Import video"}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setFormationOpen(true)}>
             <Layout className="mr-1.5 size-3.5" /> Formation
