@@ -158,6 +158,10 @@ function MatchPage() {
 
   // Import state
   const [importOpen, setImportOpen] = useState(false);
+  const [videoImportOpen, setVideoImportOpen] = useState(false);
+
+  // Local-mode video URL (object URLs not persisted to DB)
+  const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
 
   // Edit event state
   const [editEvent, setEditEvent] = useState<EditableEvent | null>(null);
@@ -166,6 +170,14 @@ function MatchPage() {
   // Export menu state
   const [exportOpen, setExportOpen] = useState(false);
   const [videoProgress, setVideoProgress] = useState<number | null>(null);
+
+  // AI video analysis state
+  const [aiVideoAnalyzing, setAiVideoAnalyzing] = useState(false);
+
+  // Resolved video URL (local takes priority over saved cloud URL)
+  const resolvedVideoUrl = localVideoUrl ?? (match?.video_storage === "cloud" ? match?.video_url : null) ?? null;
+  const resolvedVideoStorage: "local" | "cloud" | "none" =
+    localVideoUrl ? "local" : (match?.video_storage === "cloud" ? "cloud" : "none");
 
   // Mutations
   const addEvent = useMutation({
