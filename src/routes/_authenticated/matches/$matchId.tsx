@@ -11,13 +11,15 @@ import { Badge } from "@/components/ui/badge";
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft, Sparkles, Play, Pause, FastForward,
-  Upload, Layout, ChevronDown,
+  Upload, Layout, ChevronDown, Film,
 } from "lucide-react";
 import { Pitch, yToSvg } from "@/components/pitch/Pitch";
 import { Heatmap } from "@/components/pitch/Heatmap";
 import { PassNetwork } from "@/components/pitch/PassNetwork";
 import { AnalyticsTab } from "@/components/match/AnalyticsTab";
 import { ImportDialog } from "@/components/match/ImportDialog";
+import { VideoImportDialog } from "@/components/match/VideoImportDialog";
+import { VideoPanel, type Bookmark, type Annotation } from "@/components/match/VideoPanel";
 import { FormationDialog, FormationOverlay, type FormationData } from "@/components/match/FormationOverlay";
 import { TagEditDialog, type EditableEvent } from "@/components/match/ExportMenu";
 import { EVENT_TYPES, deriveTags, estimateXG } from "@/lib/tagging";
