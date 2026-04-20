@@ -36,7 +36,7 @@ interface Props {
   onDeleteBookmark: (id: string) => void;
   onAddAnnotation: (a: { timestamp_sec: number; shape: Annotation["shape"]; data: Annotation["data"]; color?: string; note?: string }) => void;
   onDeleteAnnotation: (id: string) => void;
-  onPitchClick: (videoTimeSec: number) => void; // for click-pitch-while-playing tagging
+  onPitchClick: (x: number, y: number, videoTimeSec: number) => void; // for click-pitch-while-playing tagging
   onAIAnalyze: () => void;
   onAIClipAnalyze: (startSec: number, endSec: number) => Promise<void>;
   aiAnalyzing: boolean;
@@ -359,11 +359,7 @@ export function VideoPanel({
           <Pitch
             onClick={(x, y) => {
               if (!allowWrite) return;
-              onPitchClick(currentTime);
-              // pass x/y back via a custom mechanism? we use onPitchClick alone — parent will use its own pendingType
-              // For coordinates, parent supplies them via its own pitch click flow inside parent component.
-              // Simpler: parent registers a bridge by using onPitchClick(currentTime), and tagging UI handles xy via separate handler.
-              void x; void y;
+              onPitchClick(x, y, currentTime);
             }}
             className="h-full max-h-[260px] w-full"
           />
