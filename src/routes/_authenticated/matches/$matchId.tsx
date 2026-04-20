@@ -342,7 +342,7 @@ function MatchPage() {
   });
 
   const addAnnotation = useMutation({
-    mutationFn: async (a: Omit<Annotation, "id"> & { color?: string; note?: string }) => {
+    mutationFn: async (a: { timestamp_sec: number; shape: Annotation["shape"]; data: Annotation["data"]; color?: string; note?: string }) => {
       const { error } = await supabase.from("annotations").insert({
         match_id: matchId,
         timestamp_sec: a.timestamp_sec,
